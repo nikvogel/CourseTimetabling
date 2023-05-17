@@ -52,13 +52,13 @@ def main():
     model = model_builder(instance, courses, rooms, curricula)
 
     # Set the objective function
-    set_objective_function(model, input_data, decision_variables)
+    set_objective_function(model)
 
     # Add constraints
-    add_constraints(model, input_data, decision_variables)
+    add_constraints(model)
 
     # Solve the model and print the results
-    solve_model_and_print_results(model, input_data, decision_variables)
+    solve_model_and_print_results(model)
 
 
 if __name__ == "__main__":
