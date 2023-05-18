@@ -2,6 +2,7 @@ import gurobipy as gp
 from gurobipy import GRB
 from tools import read_instance_file
 from tools import *
+from output import *
 
 # Compute required sets and graphs
 def preprocess_data(instance, courses, rooms, curricula):
@@ -119,6 +120,24 @@ def main():
 
     # Solve the model and print the results
     solve_model_and_print_results(model)
+
+     # Call the visualization functions
+    # Extract the solution into a DataFrame
+    sol_df = extract_solution(x, courses, range(instance.num_periods), instance.periods_per_day)
+
+    # Define your days of the week
+    days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][0:instance.days]
+
+    print(sol_df)
+
+    # Create timetables for all teachers
+    timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
+
+    # Create timetables for all courses
+    timetables_courses = create_timetables(sol_df, 'Course', days_of_week, instance.periods_per_day)
+
+    # Create timetables for all curricula
+    curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
 
 
 if __name__ == "__main__":
