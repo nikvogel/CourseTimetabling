@@ -19,25 +19,88 @@ def preprocess_data(instance, courses, rooms, curricula):
     return conflict_graph, schedule_graph
 
 # Build the optimization model
-def model_builder(instance, courses, rooms, curricula):
+def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph):
     # Create a new model
     model = gp.Model("CourseTimetabling")
 
-    return model
+    # Create periods
+    periods = range(instance.num_periods)
+
+    # Add binary variables x[c, p] for each course c and period p
+    x = model.addVars(courses, periods, vtype=GRB.BINARY, name="x")
+
+    # Retrieve neighborhood sizes
+    neighborhood_sizes = schedule_graph.get_neighborhood_sizes_for_all_subsets()
+
+    # Enforce that each course is scheduled exactly as often as required number of lectures
+    for course in courses:
+        available_periods = list(set(periods) - set(courses[course].unavailability))
+        model.addConstr(sum(x[course, period] for period in periods) == courses[course].num_lectures)
+
+    # Add matching constraints
+    for subset, period in neighborhood_sizes:
+        model.addConstr(sum(x[c.name, period] for c in subset) <= neighborhood_sizes[(subset, period)])
+
+    # Add conflict constraints
+    conflict_edges = conflict_graph.get_edges()
+
+    for edge in conflict_edges:
+        # Unpack edge to get courses and periods
+        ((c1, p1), (c2, p2)) = edge
+
+        # Add constraint
+        model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
+
+    return model, x
 
 # Set the objective function
-def set_objective_function(model):
+def set_objective_function(model, x, conflict_graph):
     # Set the objective function for the problem
-    pass
+    V_conf = conflict_graph.get_nodes()
 
-# Add constraints
-def add_constraints(model, input_data, decision_variables):
-    # Add the constraints required for the problem
-    pass
+    # Define the objective function
+    # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
+    # TODO - Add priority function
+    obj = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
+
+    # Set the objective function to the model
+    model.setObjective(obj, GRB.MINIMIZE)
+
+    # Update the model to include the objective
+    model.update()
+
+    return model
 
 # Solve the model and print the results
-def solve_model_and_print_results(model, input_data, decision_variables):
+def solve_model_and_print_results(model):
     # Solve the model and print the results
+    try:
+        # Optimize the model
+        model.optimize()
+        
+        # Check if an optimal solution was found
+        if model.status == GRB.OPTIMAL:
+            print('Optimal solution found')
+
+            # Print solution
+            for v in model.getVars():
+                print('%s %g' % (v.varName, v.x))
+
+            # Print objective value
+            print('Obj: %g' % model.objVal)
+            
+        # If no optimal solution was found
+        else:
+            print('No optimal solution found. Status code: ' + str(model.status))
+
+    # Catch any Gurobi errors
+    except gp.GurobiError as e:
+        print('Error code ' + str(e.errno) + ": " + str(e))
+
+    # Catch any non-Gurobi errors
+    except Exception as e:
+        print(e)
+
     pass
 
 
@@ -49,13 +112,10 @@ def main():
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
     # Create a new model
-    model = model_builder(instance, courses, rooms, curricula)
+    model, x = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
 
     # Set the objective function
-    set_objective_function(model)
-
-    # Add constraints
-    add_constraints(model)
+    model = set_objective_function(model, x, conflict_graph)
 
     # Solve the model and print the results
     solve_model_and_print_results(model)

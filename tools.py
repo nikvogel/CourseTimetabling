@@ -13,7 +13,15 @@ class Course:
 
     def compute_eligible_rooms(self, rooms):
         self.eligible_rooms = [room for room in rooms if room.capacity >= self.num_students]
-    
+
+    # Define the "__lt__" method
+    def __lt__(self, other):
+        if not isinstance(other, Course):
+            # don't attempt to compare against unrelated types
+            return NotImplemented
+
+        return self.name < other.name
+
 
 class Room:
     def __init__(self, name, capacity):
@@ -62,6 +70,18 @@ class ConflictGraph:
             for conflict in conflicts:
                 print(f"  Conflict with ({conflict[0].name}, {conflict[1]})")
 
+    def get_edges(self):
+        edges = set()
+        for node, conflicts in self.nodes.items():
+            for conflict in conflicts:
+                # Ensure that each edge is represented as a tuple of nodes in sorted order
+                edge = tuple(sorted([node, conflict]))
+                edges.add(edge)
+        return list(edges)
+
+    def get_nodes(self):
+        return list(self.nodes.keys())
+
 class PeriodGraph:
     def __init__(self, period):
         self.period = period
@@ -106,6 +126,64 @@ class ScheduleGraph:
                         if course in self.period_graphs[period].courses and room in self.period_graphs[period].rooms:
                             # Add an edge between the course and room in the PeriodGraph for this period
                             self.period_graphs[period].edges.add((course, room))
+    
+    def verify_halls_condition(self):
+        # Loop over all periods
+        for period in range(len(self.period_graphs)):
+            # Retrieve all subsets of courses for this period
+            subsets_courses = self.get_all_subsets(self.period_graphs[period].courses)
+            
+            # For each subset of courses
+            for subset in subsets_courses:
+                # Get the neighborhood of this subset
+                neighborhood = self.get_neighborhood(subset, period)
+                
+                # If the size of the neighborhood is less than the size of the subset
+                if len(neighborhood) < len(subset):
+                    # Return False - Hall's condition is not satisfied
+                    return False
+
+        # If we've made it this far, then Hall's condition is satisfied for all periods
+        return True
+
+    def get_all_subsets(self, courses):
+        # Use Python's built-in combinations function to generate all subsets of courses
+        from itertools import chain, combinations
+        return list(chain.from_iterable(combinations(courses, r) for r in range(len(courses)+1)))
+
+    def get_neighborhood(self, subset, period):
+        # Initialize an empty set to store the neighborhood
+        neighborhood = set()
+
+        # For each course-room pair in the edges of the period
+        for course, room in self.period_graphs[period].edges:
+            # If the course is in the subset
+            if course in subset:
+                # Add the room to the neighborhood
+                neighborhood.add(room)
+
+        # Return the neighborhood
+        return neighborhood
+    
+    def get_neighborhood_sizes_for_all_subsets(self):
+        # Initialize the dictionary to store neighborhood sizes
+        neighborhood_sizes = {}
+
+        # Loop over all periods
+        for period in range(len(self.period_graphs)):
+            # Retrieve all subsets of courses for this period
+            subsets_courses = self.get_all_subsets(self.period_graphs[period].courses)
+            
+            # For each subset of courses
+            for subset in subsets_courses:
+                # Get the neighborhood of this subset
+                neighborhood = self.get_neighborhood(subset, period)
+                
+                # Store the size of this neighborhood indexed by the subset and period
+                neighborhood_sizes[(frozenset(subset), period)] = len(neighborhood)
+
+        # Return the dictionary of neighborhood sizes
+        return neighborhood_sizes
 
 
 def read_instance_file(file_path):
