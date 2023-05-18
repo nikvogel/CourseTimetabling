@@ -32,15 +32,18 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
 
     # Retrieve neighborhood sizes
     neighborhood_sizes = schedule_graph.get_neighborhood_sizes_for_all_subsets()
+    print(f'Done: Neighborhood sizes')
 
     # Enforce that each course is scheduled exactly as often as required number of lectures
     for course in courses:
         available_periods = list(set(periods) - set(courses[course].unavailability))
         model.addConstr(sum(x[course, period] for period in periods) == courses[course].num_lectures)
+    print(f'Done: Course lectures')
 
     # Add matching constraints
     for subset, period in neighborhood_sizes:
         model.addConstr(sum(x[c.name, period] for c in subset) <= neighborhood_sizes[(subset, period)])
+    print(f'Done: Matching constraints')
 
     # Add conflict constraints
     conflict_edges = conflict_graph.get_edges()
@@ -51,7 +54,7 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
 
         # Add constraint
         model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
-
+    print(f'Done: Conflict constraints')
     return model, x
 
 # Set the objective function
@@ -107,7 +110,7 @@ def solve_model_and_print_results(model):
 
 def main():
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("toy.txt")
+    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
