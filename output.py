@@ -22,7 +22,10 @@ def create_timetables(df, entity, days, periods_per_day):
 
         # Fill the timetable
         for entry in df[df[entity] == e].itertuples():
-            sub_df.at[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]] = getattr(entry, "Course")
+            if pd.isna(sub_df.loc[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]]):
+                sub_df.at[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]] = getattr(entry, "Course")
+            else:
+                print(f'Two courses are scheduled in the same period for {entity}: {e} \n')
 
         # Print the timetable
         print(f'Timetable {entity}: {e} \n')

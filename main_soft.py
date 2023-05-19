@@ -20,7 +20,7 @@ def preprocess_data(instance, courses, rooms, curricula):
     return conflict_graph, schedule_graph
 
 # Build the optimization model
-def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph):
+def model_builder_first_stage(instance, courses, rooms, curricula, conflict_graph, schedule_graph):
     # Create a new model
     model = gp.Model("CourseTimetabling")
 
@@ -33,7 +33,7 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
     # Enforce that each course is scheduled exactly as often as required number of lectures
     for course in courses:
         available_periods = list(set(periods) - set(courses[course].unavailability))
-        model.addConstr(sum(x[course, period] for period in periods) == courses[course].num_lectures)
+        model.addConstr(sum(x[course, period] for period in available_periods) == courses[course].num_lectures)
     print(f'Done: Course lectures')
 
     ### Constraints for room capacities ###
@@ -112,22 +112,24 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
                 else:  # for the first period of the day
                     model.addConstr(r[p, cu_index] - r[p + 1, cu_index] - v[p, cu_index] <= 0,
                                     f"compactness_{cu_index}_{day}_{period}_first")
-
-
-    # # Add conflict constraints
-    # conflict_edges = conflict_graph.get_edges()
-
-    # for edge in conflict_edges:
-    #     # Unpack edge to get courses and periods
-    #     ((c1, p1), (c2, p2)) = edge
-
-    #     # Add constraint
-    #     model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
     print(f'Done: Conflict constraints')
+
+    ### Teacher constraint ###
+
+    # Define teachers' sets of courses
+    teachers = set(course.teacher for course in courses.values())
+    teachers_courses = {teacher: [course for course in courses.values() if course.teacher == teacher] for teacher in teachers}
+
+    # For each period and each teacher, the sum of x[c, p] for all courses taught by the teacher should be <= 1.
+    for teacher in teachers:
+        for p in periods:
+            model.addConstr(
+                gp.quicksum(x[c.name, p] for c in teachers_courses[teacher]) <= 1,
+                f"teacher_conflicts_{teacher}_{p}")
     return model, x, y, w, v
 
 # Set the objective function
-def set_objective_function(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc, penalty_v):
+def set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc, penalty_v):
     # Create periods
     periods = range(instance.num_periods)
 
@@ -138,13 +140,15 @@ def set_objective_function(model, x, y, w, v, instance, courses, rooms, curricul
     room_capacities = [room.capacity for room in rooms]
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
-    room_capacities.sort
+    room_capacities.sort()
     
 
     # Create dictionary holding obj, relecting the difference between demanded and scheduled room capacity
     obj_s_c_p = {}
+    C_s_dict = {}
     for s in room_capacities[:-1]:
         C_s = [c for c in courses.values() if c.num_students >= s]
+        C_s_dict[s] = C_s
         for c in C_s:
             for p in periods:
                 obj_s_c_p[s, c.name, p] = min(c.num_students - s, s + 1 - s)
@@ -153,7 +157,12 @@ def set_objective_function(model, x, y, w, v, instance, courses, rooms, curricul
     # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
     # TODO - Add priority function
     objective_1 = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
-    objective_2 = gp.quicksum(obj_s_c_p[s, c.name, p] * y[s, c.name, p] for s in room_capacities[:-1] for c in C_s for p in periods)
+    #objective_2 = gp.quicksum(obj_s_c_p[s, c.name, p] * y[s, c.name, p] for s in room_capacities[:-1] for c in C_s[s] for p in periods)
+    objective_2 = 0
+    for s in room_capacities[:-1]:
+        for c in C_s_dict[s]:
+            for p in periods:
+                objective_2 += obj_s_c_p[s, c.name, p] * y[s, c.name, p]
     objective_3 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
     objective_4 = gp.quicksum(penalty_v * v[p, cu_index] for p in periods for cu_index in range(len(curricula)))
     
@@ -166,7 +175,7 @@ def set_objective_function(model, x, y, w, v, instance, courses, rooms, curricul
     return model
 
 # Solve the model and print the results
-def solve_model_and_print_results(model):
+def solve_model_and_print_results_first_stage(model):
     # Solve the model and print the results
     try:
         # Optimize the model
@@ -177,8 +186,8 @@ def solve_model_and_print_results(model):
             print('Optimal solution found')
 
             # Print solution
-            for v in model.getVars():
-                print('%s %g' % (v.varName, v.x))
+            # for v in model.getVars():
+             #   print('%s %g' % (v.varName, v.x))
 
             # Print objective value
             print('Obj: %g' % model.objVal)
@@ -200,19 +209,23 @@ def solve_model_and_print_results(model):
 
 def main():
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("Instances/toy.txt")
+    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
+    ### First stage ###
+
     # Create a new model
-    model, x, y, w, v = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
+    model, x, y, w, v = model_builder_first_stage(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
 
     # Set the objective function
-    model = set_objective_function(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
+    model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
+
+    model.write("model_first_stage.lp")
 
     # Solve the model and print the results
-    solve_model_and_print_results(model)
+    solve_model_and_print_results_first_stage(model)
 
      # Call the visualization functions
     # Extract the solution into a DataFrame
@@ -231,6 +244,11 @@ def main():
 
     # Create timetables for all curricula
     curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
+
+
+    ### Second stage ###
+
+    #TODO - Add second stage
 
 
 if __name__ == "__main__":
