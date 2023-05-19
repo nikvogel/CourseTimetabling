@@ -187,8 +187,8 @@ def solve_model_and_print_results_first_stage(model):
             print('Optimal solution found')
 
             # Print solution
-            # for v in model.getVars():
-             #   print('%s %g' % (v.varName, v.x))
+            for v in model.getVars():
+                print('%s %g' % (v.varName, v.x))
 
             # Print objective value
             print('Obj: %g' % model.objVal)
@@ -229,16 +229,22 @@ def preprocess_second_stage(instance, courses, rooms, x, y):
         C_s = [course.name for course in courses.values() if course.num_students >= s] 
         for (c, p) in U:
             for (r, _) in V:
+                #if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
+                if courses[c].num_students <= r.capacity:
+                    E.append((c, r, p))
                 if c in C_s:
-                    if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
-                        E.append((c, r, p))
                     if (y[s, c, p].X == 1 and courses[c].num_students > r.capacity and 
                         r.capacity == max_smaller_value(room_capacities, courses[c].num_students)):
                         E.append((c, r, p))
+                    else:
+                        pass
                 else:
                     pass
     # Remove duplicates            
     E = list(set(E))
+
+    for edge in [e for e in E if e[0] == 'ArcTec']:
+        print(edge)
 
     return U, V, E
 
@@ -269,15 +275,14 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
     print(f'E: {E}')
     print(f'U: {U}')
     for c, p in U:
-        print(f'c: {c}, p: {p}')
-        for c in [r[1] for r in E if (r[0],r[2]) == (c,p)]:
-            stage2_model.addConstr(u_v.sum(c, r, p) == 1)
+        stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
+                                for r in [e[1] for e in E if (e[0],e[2]) == (c,p)])== 1)
 
     # Constraint (21): sum over u_c,p v_r,p ∈δ(v_r,p ) ( u_c,p v_r,p) ≤ 1 ∀v_r,p ∈ V
     # TODO - Add cut delta(v_r,p)
-    # for r, p in V:
-    #     for c in [r[1] for r in E if (r[0],r[2]) == (c,p)]:
-    #         stage2_model.addConstr(u_v.sum(c, r, p) == 1)
+    for r, p in V:
+        stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
+                                            for c in [e[0] for e in E if (e[1],e[2]) == (r,p)]) <= 1)
 
     stage2_model.write("model_second_stage.lp")
 
@@ -291,7 +296,7 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
 
 def main():
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("Instances/toy.txt")
+    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
