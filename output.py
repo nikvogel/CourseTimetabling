@@ -45,7 +45,6 @@ def create_curricula_timetables(df, curicula, days, periods_per_day):
             course_names.append(course.name)
         # Fill the timetable
         for entry in df[df['Course'].isin(course_names)].itertuples():
-            print(entry)
             if pd.isna(sub_df.loc[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]]):
                 sub_df.at[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]] = getattr(entry, "Course")
             else:

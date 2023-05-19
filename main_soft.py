@@ -30,20 +30,45 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
     # Add binary variables x[c, p] for each course c and period p
     x = model.addVars(courses, periods, vtype=GRB.BINARY, name="x")
 
-    # Retrieve neighborhood sizes
-    neighborhood_sizes = schedule_graph.get_neighborhood_sizes_for_all_subsets()
-    print(f'Done: Neighborhood sizes')
-
     # Enforce that each course is scheduled exactly as often as required number of lectures
     for course in courses:
         available_periods = list(set(periods) - set(courses[course].unavailability))
         model.addConstr(sum(x[course, period] for period in periods) == courses[course].num_lectures)
     print(f'Done: Course lectures')
 
-    # Add matching constraints
-    for subset, period in neighborhood_sizes:
-        model.addConstr(sum(x[c.name, period] for c in subset) <= neighborhood_sizes[(subset, period)])
-    print(f'Done: Matching constraints')
+    # Number of courses that can take place at p is less than or equal to the number of (available) rooms
+    for period in periods:
+        model.addConstr(sum(x[course, period] for course in courses) <= 
+                        instance.num_rooms,  name=f"room_availability_{period}")
+    
+    # Compute list of room capacities
+    room_capacities = [room.capacity for room in rooms]
+    print(room_capacities)
+    # Remove duplicates to get a set of room capacities
+    room_capacities = list(set(room_capacities))
+    room_capacities.sort()
+    
+    y = {}
+    for s in room_capacities[:-1]: # For each s ∈ S , except the biggest (see IP model)
+        C_s = [course.name for course in courses.values() if course.num_students >= s] 
+        for c in C_s:
+            for p in periods:
+                # Add binary variables y[s, c, p] for each course c, period p and room capacity s
+                y[s, c, p] = model.addVar(vtype=GRB.BINARY, name=f"y_{s}_{c}_{p}")
+                # Add constraint 
+                # TODO - Explain this constraint
+                model.addConstr(x[c, p] - y[s, c, p] >= 0, 
+                            name=f"room_capacity_{c}_{p}_{s}")
+
+    # 3. sum over c∈C≥s(x_c,p − y_s,c,p) ≤ |R≥s|
+    # TODO - Explain this constraint
+    for s in room_capacities:
+        C_s = [c.name for c in courses.values() if c.num_students >= s] 
+        R_s = [r for r in rooms if r.capacity >= s]
+        for p in periods:
+            model.addConstr(gp.quicksum(x[c, p] - y[s, c, p] for c in C_s) <= len(R_s), 
+                            name=f"large_room_availability_{p}_{s}")
+
 
     # Add conflict constraints
     conflict_edges = conflict_graph.get_edges()
@@ -55,20 +80,39 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
         # Add constraint
         model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
     print(f'Done: Conflict constraints')
-    return model, x
+    return model, x, y
 
 # Set the objective function
-def set_objective_function(model, x, conflict_graph):
+def set_objective_function(model, x, y, instance, courses, rooms, conflict_graph):
+    # Create periods
+    periods = range(instance.num_periods)
+
     # Set the objective function for the problem
     V_conf = conflict_graph.get_nodes()
+
+    # Compute list of room capacities
+    room_capacities = [room.capacity for room in rooms]
+    # Remove duplicates to get a set of room capacities
+    room_capacities = list(set(room_capacities))
+    room_capacities.sort
+    
+
+    # Create dictionary holding obj, relecting the difference between demanded and scheduled room capacity
+    obj_s_c_p = {}
+    for s in room_capacities[:-1]:
+        C_s = [c for c in courses.values() if c.num_students >= s]
+        for c in C_s:
+            for p in periods:
+                obj_s_c_p[s, c.name, p] = min(c.num_students - s, s + 1 - s)
 
     # Define the objective function
     # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
     # TODO - Add priority function
-    obj = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
+    objective_1 = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
+    objective_2 = gp.quicksum(obj_s_c_p[s, c.name, p] * y[s, c.name, p] for s in room_capacities[:-1] for c in C_s for p in periods)
 
     # Set the objective function to the model
-    model.setObjective(obj, GRB.MINIMIZE)
+    model.setObjective(objective_1 + objective_2, GRB.MINIMIZE)
 
     # Update the model to include the objective
     model.update()
@@ -110,16 +154,16 @@ def solve_model_and_print_results(model):
 
 def main():
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
+    instance, courses, rooms, curricula = read_instance_file("Instances/toy.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
     # Create a new model
-    model, x = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
+    model, x, y = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
 
     # Set the objective function
-    model = set_objective_function(model, x, conflict_graph)
+    model = set_objective_function(model, x, y, instance, courses, rooms, conflict_graph)
 
     # Solve the model and print the results
     solve_model_and_print_results(model)
