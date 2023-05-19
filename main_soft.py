@@ -45,7 +45,6 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
     
     # Compute list of room capacities
     room_capacities = [room.capacity for room in rooms]
-    print(room_capacities)
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
@@ -85,25 +84,50 @@ def model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_
     # create w variables
     w = model.addVars(courses.keys(), vtype=GRB.INTEGER, name="w")
 
-    # constraint: sum over d (z_c,d) + w_c ≥ mnd(c) ∀c∈C
+    # Add constraint: sum over d (z_c,d) + w_c ≥ mnd(c) ∀c∈C
     for c, course in courses.items():
         model.addConstr(gp.quicksum(z[c, d] for d in range(instance.days)) + w[c] >= course.min_days, f"min_days2_{c}")
 
+    ### Curriculum compactness constraints ###
 
-    # Add conflict constraints
-    conflict_edges = conflict_graph.get_edges()
+    # Add new binary variables r and v
+    r = model.addVars(periods, range(len(curricula)), vtype=GRB.BINARY, name="r")
+    v = model.addVars(periods, range(len(curricula)), vtype=GRB.BINARY, name="v")
 
-    for edge in conflict_edges:
-        # Unpack edge to get courses and periods
-        ((c1, p1), (c2, p2)) = edge
+    for cu_index, cu in enumerate(curricula):
+        for p in periods:
+            model.addConstr(gp.quicksum(x[c.name, p] for c in cu.courses) - r[p, cu_index] == 0, f"curriculum_period_{cu_index}_{p}")
 
-        # Add constraint
-        model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
+    for cu_index in range(len(curricula)):
+        for day in range(instance.days):
+            for period in range(instance.periods_per_day):
+                p = day * instance.periods_per_day + period  # calculate the absolute period
+                if period != 0:  # not the first period of the day
+                    if period != instance.periods_per_day - 1:  # not the last period of the day
+                        model.addConstr(-r[p - 1, cu_index] + r[p, cu_index] - r[p + 1, cu_index] - v[p, cu_index] <= 0,
+                                        f"compactness_{cu_index}_{day}_{period}")
+                    else:  # for the last period of the day
+                        model.addConstr(-r[p - 1, cu_index] + r[p, cu_index] - v[p, cu_index] <= 0,
+                                        f"compactness_{cu_index}_{day}_{period}_last")
+                else:  # for the first period of the day
+                    model.addConstr(r[p, cu_index] - r[p + 1, cu_index] - v[p, cu_index] <= 0,
+                                    f"compactness_{cu_index}_{day}_{period}_first")
+
+
+    # # Add conflict constraints
+    # conflict_edges = conflict_graph.get_edges()
+
+    # for edge in conflict_edges:
+    #     # Unpack edge to get courses and periods
+    #     ((c1, p1), (c2, p2)) = edge
+
+    #     # Add constraint
+    #     model.addConstr(x[c1.name, p1] + x[c2.name, p2] <= 1)
     print(f'Done: Conflict constraints')
-    return model, x, y, w
+    return model, x, y, w, v
 
 # Set the objective function
-def set_objective_function(model, x, y, w, instance, courses, rooms, conflict_graph, penalty_wc):
+def set_objective_function(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc, penalty_v):
     # Create periods
     periods = range(instance.num_periods)
 
@@ -131,9 +155,10 @@ def set_objective_function(model, x, y, w, instance, courses, rooms, conflict_gr
     objective_1 = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
     objective_2 = gp.quicksum(obj_s_c_p[s, c.name, p] * y[s, c.name, p] for s in room_capacities[:-1] for c in C_s for p in periods)
     objective_3 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
+    objective_4 = gp.quicksum(penalty_v * v[p, cu_index] for p in periods for cu_index in range(len(curricula)))
     
     # Set the objective function to the model
-    model.setObjective(objective_1 + objective_2 + objective_3, GRB.MINIMIZE)
+    model.setObjective(objective_1 + objective_2 + objective_3 + objective_4, GRB.MINIMIZE)
 
     # Update the model to include the objective
     model.update()
@@ -181,10 +206,10 @@ def main():
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
     # Create a new model
-    model, x, y, w = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
+    model, x, y, w, v = model_builder(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
 
     # Set the objective function
-    model = set_objective_function(model, x, y, w, instance, courses, rooms, conflict_graph, penalty_wc=5)
+    model = set_objective_function(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
 
     # Solve the model and print the results
     solve_model_and_print_results(model)

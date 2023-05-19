@@ -48,7 +48,7 @@ def create_curricula_timetables(df, curicula, days, periods_per_day):
             if pd.isna(sub_df.loc[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]]):
                 sub_df.at[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]] = getattr(entry, "Course")
             else:
-                print(f'Two courses are scheduled in the same period for curriculum: {curiculum} \n')
+                print(f'Two courses are scheduled in the same period for curriculum: {curiculum.name} \n')
 
         # Print the timetable
         print(f'Timetable {curiculum.name} \n')
