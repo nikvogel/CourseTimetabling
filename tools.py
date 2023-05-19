@@ -289,3 +289,14 @@ def generate_conflict_graph(instance, courses, curricula):
                         graph.add_conflict(curriculum.courses[i], period, curriculum.courses[j], period)
 
         return graph
+
+def max_smaller_value(lst, value):
+    # Filter list to get only values smaller than the target value
+    smaller_values = [i for i in lst if i < value]
+
+    # If no smaller value exists, return None
+    if not smaller_values:
+        return None
+
+    # Return the maximum value among the smaller values
+    return max(smaller_values)

@@ -1,8 +1,9 @@
 import gurobipy as gp
 from gurobipy import GRB
+import itertools
 from tools import read_instance_file
 from tools import *
-from output import *
+from output_tools import *
 
 # Compute required sets and graphs
 def preprocess_data(instance, courses, rooms, curricula):
@@ -22,7 +23,7 @@ def preprocess_data(instance, courses, rooms, curricula):
 # Build the optimization model
 def model_builder_first_stage(instance, courses, rooms, curricula, conflict_graph, schedule_graph):
     # Create a new model
-    model = gp.Model("CourseTimetabling")
+    model = gp.Model("Course_Timetabling")
 
     # Create periods
     periods = range(instance.num_periods)
@@ -206,10 +207,91 @@ def solve_model_and_print_results_first_stage(model):
 
     pass
 
+def preprocess_second_stage(instance, courses, rooms, x, y):
+    # Define U = {(course, period) : x[course, period] == 1, for all courses and periods}
+    U = [(c, p) for c in courses for p in range(instance.num_periods) if x[c, p].X == 1]
+    print(f'U: {U}')
+
+    # Define V = {(room, period) for all rooms and periods}
+    V = [(r, p) for r in rooms for p in range(instance.num_periods)]
+    print(f'V: {V}')
+
+    # Compute list of room capacities
+    room_capacities = [room.capacity for room in rooms]
+    # Remove duplicates to get a set of room capacities
+    room_capacities = list(set(room_capacities))
+    room_capacities.sort()
+    print(room_capacities)
+
+    # Define set of Edges between U and V
+    E = []
+    for s in room_capacities[:-1]:
+        C_s = [course.name for course in courses.values() if course.num_students >= s] 
+        for (c, p) in U:
+            for (r, _) in V:
+                if c in C_s:
+                    if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
+                        E.append((c, r, p))
+                    if (y[s, c, p].X == 1 and courses[c].num_students > r.capacity and 
+                        r.capacity == max_smaller_value(room_capacities, courses[c].num_students)):
+                        E.append((c, r, p))
+                else:
+                    pass
+    # Remove duplicates            
+    E = list(set(E))
+
+    return U, V, E
+
+def model_builder_second_stage(instance, courses, rooms, U, V, E):
+    # Define the second-stage model
+    stage2_model = gp.Model("Course_Room_Assignment")
+
+    # Define decision variables
+    y = stage2_model.addVars(courses, rooms, vtype=GRB.BINARY, name="y")  # y_c,r
+    u_v = stage2_model.addVars(E, vtype=GRB.BINARY, name="u_v")  # u_c,p v_r,p
+    
+    # Save u_v as txt file
+    with open('u_v.txt', 'w') as f:
+        for key, value in u_v.items():
+            f.write('%s:%s\n' % (key, value))
+
+    # Objective function: minimize sum over c∈C,r∈R(y_c,r)
+    stage2_model.setObjective(gp.quicksum(y[c, r] for c in courses for r in rooms), GRB.MINIMIZE)
+
+    # Constraint (19): sum over p∈P(u_c,p v_r,p)−|P|·y_c,r≤0 ∀c∈C,r∈R
+    for c in courses:
+        for r in rooms:
+            stage2_model.addConstr(u_v.sum(c,r,'*') - 
+                                   instance.num_periods * y[c, r] <= 0)
+                        
+    # Constraint (20): sum over u_c,p v_r,p ∈δ(u_c,p ) (u_c,p v_r,p) = 1 ∀u_c,p ∈U
+    # TODO - Add cut delta(u_c,p)
+    print(f'E: {E}')
+    print(f'U: {U}')
+    for c, p in U:
+        print(f'c: {c}, p: {p}')
+        for c in [r[1] for r in E if (r[0],r[2]) == (c,p)]:
+            stage2_model.addConstr(u_v.sum(c, r, p) == 1)
+
+    # Constraint (21): sum over u_c,p v_r,p ∈δ(v_r,p ) ( u_c,p v_r,p) ≤ 1 ∀v_r,p ∈ V
+    # TODO - Add cut delta(v_r,p)
+    # for r, p in V:
+    #     for c in [r[1] for r in E if (r[0],r[2]) == (c,p)]:
+    #         stage2_model.addConstr(u_v.sum(c, r, p) == 1)
+
+    stage2_model.write("model_second_stage.lp")
+
+    # Solve the second stage model
+    stage2_model.optimize()
+
+    # print results
+    for v in stage2_model.getVars():
+        if v.x > 0.5:
+            print('%s %g' % (v.varName, v.x))
 
 def main():
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
+    instance, courses, rooms, curricula = read_instance_file("Instances/toy.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
@@ -229,12 +311,11 @@ def main():
 
      # Call the visualization functions
     # Extract the solution into a DataFrame
-    sol_df = extract_solution(x, courses, range(instance.num_periods), instance.periods_per_day)
+    sol_df = extract_solution_first_stage(x, courses, range(instance.num_periods), instance.periods_per_day)
+    sol_df.to_csv("Output/solution_first_stage.csv")
 
     # Define your days of the week
     days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][0:instance.days]
-
-    print(sol_df)
 
     # Create timetables for all teachers
     timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
@@ -245,10 +326,12 @@ def main():
     # Create timetables for all curricula
     curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
 
-
     ### Second stage ###
 
-    #TODO - Add second stage
+    U, V, E = preprocess_second_stage(instance, courses, rooms, x, y)
+
+    # Build the second stage model
+    model_builder_second_stage(instance, courses, rooms, U, V, E)
 
 
 if __name__ == "__main__":
