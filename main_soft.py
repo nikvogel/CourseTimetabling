@@ -45,14 +45,14 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
                         instance.num_rooms,  name=f"room_availability_{period}")
     
     # Compute list of room capacities
-    room_capacities = [room.capacity for room in rooms]
+    room_capacities = [room.capacity for room in rooms.values()]
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
 
     y = {}
     for s in room_capacities[:-1]: # For each s ∈ S , except the biggest (see IP model)
-        C_s = [course.name for course in courses.values() if course.num_students >= s] 
+        C_s = [course.name for course in courses.values() if course.num_students > s] 
         for c in C_s:
             for p in periods:
                 # Add binary variables y[s, c, p] for each course c, period p and room capacity s
@@ -64,9 +64,9 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
 
     # 3. sum over c∈C≥s(x_c,p − y_s,c,p) ≤ |R≥s|
     # TODO - Explain this constraint
-    for s in room_capacities:
-        C_s = [c.name for c in courses.values() if c.num_students >= s] 
-        R_s = [r for r in rooms if r.capacity >= s]
+    for s in room_capacities[:-1]:
+        C_s = [c.name for c in courses.values() if c.num_students > s] 
+        R_s = [r.name for r in rooms.values() if r.capacity > s]
         for p in periods:
             model.addConstr(gp.quicksum(x[c, p] - y[s, c, p] for c in C_s) <= len(R_s), 
                             name=f"large_room_availability_{p}_{s}")
@@ -92,27 +92,27 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     ### Curriculum compactness constraints ###
 
     # Add new binary variables r and v
-    r = model.addVars(periods, range(len(curricula)), vtype=GRB.BINARY, name="r")
-    v = model.addVars(periods, range(len(curricula)), vtype=GRB.BINARY, name="v")
+    r = model.addVars(periods, curricula, vtype=GRB.BINARY, name="r")
+    v = model.addVars(periods, curricula, vtype=GRB.BINARY, name="v")
 
-    for cu_index, cu in enumerate(curricula):
+    for curriculum in curricula:
         for p in periods:
-            model.addConstr(gp.quicksum(x[c.name, p] for c in cu.courses) - r[p, cu_index] == 0, f"curriculum_period_{cu_index}_{p}")
+            model.addConstr(gp.quicksum(x[c.name, p] for c in curricula[curriculum].courses) - r[p, curriculum] == 0, f"curriculum_period_{curriculum}_{p}")
 
-    for cu_index in range(len(curricula)):
+    for curriculum in curricula:
         for day in range(instance.days):
             for period in range(instance.periods_per_day):
                 p = day * instance.periods_per_day + period  # calculate the absolute period
                 if period != 0:  # not the first period of the day
                     if period != instance.periods_per_day - 1:  # not the last period of the day
-                        model.addConstr(-r[p - 1, cu_index] + r[p, cu_index] - r[p + 1, cu_index] - v[p, cu_index] <= 0,
-                                        f"compactness_{cu_index}_{day}_{period}")
+                        model.addConstr(-r[p - 1, curriculum] + r[p, curriculum] - r[p + 1, curriculum] - v[p, curriculum] <= 0,
+                                        f"compactness_{curriculum}_{day}_{period}")
                     else:  # for the last period of the day
-                        model.addConstr(-r[p - 1, cu_index] + r[p, cu_index] - v[p, cu_index] <= 0,
-                                        f"compactness_{cu_index}_{day}_{period}_last")
+                        model.addConstr(-r[p - 1, curriculum] + r[p, curriculum] - v[p, curriculum] <= 0,
+                                        f"compactness_{curriculum}_{day}_{period}_last")
                 else:  # for the first period of the day
-                    model.addConstr(r[p, cu_index] - r[p + 1, cu_index] - v[p, cu_index] <= 0,
-                                    f"compactness_{cu_index}_{day}_{period}_first")
+                    model.addConstr(r[p, curriculum] - r[p + 1, curriculum] - v[p, curriculum] <= 0,
+                                    f"compactness_{curriculum}_{day}_{period}_first")
     print(f'Done: Conflict constraints')
 
     ### Teacher constraint ###
@@ -138,7 +138,7 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     V_conf = conflict_graph.get_nodes()
 
     # Compute list of room capacities
-    room_capacities = [room.capacity for room in rooms]
+    room_capacities = [room.capacity for room in rooms.values()]
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
@@ -148,7 +148,7 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     obj_s_c_p = {}
     C_s_dict = {}
     for s in room_capacities[:-1]:
-        C_s = [c for c in courses.values() if c.num_students >= s]
+        C_s = [c for c in courses.values() if c.num_students > s]
         C_s_dict[s] = C_s
         for c in C_s:
             for p in periods:
@@ -158,14 +158,14 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
     # TODO - Add priority function
     objective_1 = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
-    #objective_2 = gp.quicksum(obj_s_c_p[s, c.name, p] * y[s, c.name, p] for s in room_capacities[:-1] for c in C_s[s] for p in periods)
+    # objective_2 = gp.quicksum(y[s, c.name, p] for s in room_capacities[:-1] for c in C_s_dict[s] for p in periods)
     objective_2 = 0
     for s in room_capacities[:-1]:
         for c in C_s_dict[s]:
             for p in periods:
                 objective_2 += obj_s_c_p[s, c.name, p] * y[s, c.name, p]
     objective_3 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
-    objective_4 = gp.quicksum(penalty_v * v[p, cu_index] for p in periods for cu_index in range(len(curricula)))
+    objective_4 = gp.quicksum(penalty_v * v[p, curriculum] for p in periods for curriculum in curricula)
     
     # Set the objective function to the model
     model.setObjective(objective_1 + objective_2 + objective_3 + objective_4, GRB.MINIMIZE)
@@ -187,8 +187,13 @@ def solve_model_and_print_results_first_stage(model):
             print('Optimal solution found')
 
             # Print solution
+            sol = ['']
             for v in model.getVars():
-                print('%s %g' % (v.varName, v.x))
+                if v.x > 0.5:
+                    sol += '%s %g' % (v.varName, v.x) + '\n'
+            
+            with open('solution.txt', 'w') as f:
+                f.write(''.join(sol))
 
             # Print objective value
             print('Obj: %g' % model.objVal)
@@ -210,14 +215,12 @@ def solve_model_and_print_results_first_stage(model):
 def preprocess_second_stage(instance, courses, rooms, x, y):
     # Define U = {(course, period) : x[course, period] == 1, for all courses and periods}
     U = [(c, p) for c in courses for p in range(instance.num_periods) if x[c, p].X == 1]
-    print(f'U: {U}')
 
     # Define V = {(room, period) for all rooms and periods}
     V = [(r, p) for r in rooms for p in range(instance.num_periods)]
-    print(f'V: {V}')
 
     # Compute list of room capacities
-    room_capacities = [room.capacity for room in rooms]
+    room_capacities = [room.capacity for room in rooms.values()]
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
@@ -226,25 +229,23 @@ def preprocess_second_stage(instance, courses, rooms, x, y):
     # Define set of Edges between U and V
     E = []
     for s in room_capacities[:-1]:
-        C_s = [course.name for course in courses.values() if course.num_students >= s] 
+        C_s = [course.name for course in courses.values() if course.num_students > s] 
         for (c, p) in U:
             for (r, _) in V:
                 #if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
-                if courses[c].num_students <= r.capacity:
+                if courses[c].num_students <= rooms[r].capacity:
                     E.append((c, r, p))
                 if c in C_s:
-                    if (y[s, c, p].X == 1 and courses[c].num_students > r.capacity and 
-                        r.capacity == max_smaller_value(room_capacities, courses[c].num_students)):
+                    if (y[s, c, p].X == 1 and courses[c].num_students > rooms[r].capacity and 
+                        rooms[r].capacity == max_smaller_value(room_capacities, courses[c].num_students)):
                         E.append((c, r, p))
                     else:
                         pass
                 else:
                     pass
+
     # Remove duplicates            
     E = list(set(E))
-
-    for edge in [e for e in E if e[0] == 'ArcTec']:
-        print(edge)
 
     return U, V, E
 
@@ -272,8 +273,8 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
                         
     # Constraint (20): sum over u_c,p v_r,p ∈δ(u_c,p ) (u_c,p v_r,p) = 1 ∀u_c,p ∈U
     # TODO - Add cut delta(u_c,p)
-    print(f'E: {E}')
-    print(f'U: {U}')
+    #print(f'E: {E}')
+    #print(f'U: {U}')
     for c, p in U:
         stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
                                 for r in [e[1] for e in E if (e[0],e[2]) == (c,p)])== 1)
@@ -288,6 +289,9 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
 
     # Solve the second stage model
     stage2_model.optimize()
+
+    #stage2_model.computeIIS()
+    #stage2_model.write("model.ilp")
 
     # print results
     for v in stage2_model.getVars():
@@ -327,6 +331,11 @@ def main():
 
     # Create timetables for all courses
     timetables_courses = create_timetables(sol_df, 'Course', days_of_week, instance.periods_per_day)
+    master_timetable_courses = merge_df_cells(list(timetables_courses.values()))
+    master_timetable_courses.to_csv("Output/master_timetable_courses.csv")
+    print('Master timetable for all courses: \n')
+    print(master_timetable_courses)
+    print('\n')
 
     # Create timetables for all curricula
     curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)

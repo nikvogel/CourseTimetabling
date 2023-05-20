@@ -28,37 +28,50 @@ def create_timetables(df, entity, days, periods_per_day):
                 print(f'Two courses are scheduled in the same period for {entity}: {e} \n')
 
         # Print the timetable
-        print(f'Timetable {entity}: {e} \n')
-        print(sub_df)
-        print('\n')
+        # print(f'Timetable {entity}: {e} \n')
+        # print(sub_df)
+        # print('\n')
 
         # Store the timetable
         timetables[e] = sub_df
     return timetables
 
-def create_curricula_timetables(df, curicula, days, periods_per_day):
+def create_curricula_timetables(df, curricula, days, periods_per_day):
     """Creates a timetable for curricula."""
     timetables = {}
-    for curiculum in curicula:
+    for curriculum in curricula:
         # Create a new timetable for the entity with days as columns and periods as rows
         sub_df = pd.DataFrame(columns=days, index=range(1, periods_per_day+1))
         # Course names
         course_names = []
-        for course in curiculum.courses:
+        for course in curricula[curriculum].courses:
             course_names.append(course.name)
         # Fill the timetable
         for entry in df[df['Course'].isin(course_names)].itertuples():
             if pd.isna(sub_df.loc[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]]):
                 sub_df.at[getattr(entry, "Period")+1 , days[getattr(entry, "Day")]] = getattr(entry, "Course")
             else:
-                print(f'Two courses are scheduled in the same period for curriculum: {curiculum.name} \n')
+                print(f'Two courses are scheduled in the same period for curriculum: {curriculum.name} \n')
 
         # Print the timetable
-        print(f'Timetable {curiculum.name} \n')
-        print(sub_df)
-        print('\n')
+        # print(f'Timetable {curriculum} \n')
+        # print(sub_df)
+        # print('\n')
         
         # Store the timetable
-        timetables[curiculum.name] = sub_df
+        timetables[curriculum] = sub_df
     
     return timetables
+
+def merge_df_cells(dfs):
+    return pd.DataFrame(
+        data=[
+            [
+                [df.iloc[i, j] for df in dfs if pd.notnull(df.iloc[i, j])] 
+                for j in range(dfs[0].shape[1])
+            ] 
+            for i in range(dfs[0].shape[0])
+        ],
+        index=dfs[0].index,
+        columns=dfs[0].columns
+    )

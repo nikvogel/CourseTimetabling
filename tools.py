@@ -12,7 +12,7 @@ class Course:
         self.unavailability.append(period)
 
     def compute_eligible_rooms(self, rooms):
-        self.eligible_rooms = [room for room in rooms if room.capacity >= self.num_students]
+        self.eligible_rooms = [room.name for room in rooms.values() if room.capacity >= self.num_students]
 
     # Define the "__lt__" method
     def __lt__(self, other):
@@ -187,8 +187,8 @@ class ScheduleGraph:
 
 
 def read_instance_file(file_path):
-    rooms = []
-    curricula = []
+    rooms = {}
+    curricula = {}
     instance = None
     courses = {}
 
@@ -223,7 +223,7 @@ def read_instance_file(file_path):
             while not lines[line_idx].strip() == "":
                 room_data = lines[line_idx].strip().split()
                 room = Room(room_data[0], int(room_data[1]))
-                rooms.append(room)
+                rooms[room_data[0]] = room
                 line_idx += 1
 
         elif line.startswith('CURRICULA:'):
@@ -233,7 +233,7 @@ def read_instance_file(file_path):
                 num_courses = int(curriculum_data[1])
                 curriculum_courses = [courses[course_name] for course_name in curriculum_data[2:2 + num_courses]]
                 curriculum = Curriculum(curriculum_data[0], num_courses, curriculum_courses)
-                curricula.append(curriculum)
+                curricula[curriculum_data[0]] = curriculum
                 line_idx += 1
 
         elif line.startswith('UNAVAILABILITY_CONSTRAINTS:'):
@@ -261,11 +261,11 @@ def read_instance_file(file_path):
             print(f"  Unavailability: Period {unavailability}")
 
     print("\nRooms:")
-    for room in rooms:
+    for room in rooms.values():
         print(f"{room.name} {room.capacity}")
 
     print("\nCurricula:")
-    for curriculum in curricula:
+    for curriculum in curricula.values():
         print(f"{curriculum.name} {curriculum.num_courses}")
         for course in curriculum.courses:
             print(f"  {course.name}")
@@ -276,7 +276,7 @@ def generate_conflict_graph(instance, courses, curricula):
         graph = ConflictGraph()
 
         # Courses in the same curriculum are in conflict
-        for curriculum in curricula:
+        for curriculum in curricula.values():
             for period in range(instance.num_periods):
                 for i in range(len(curriculum.courses)):
                     # Only include periods that are available for the course
@@ -300,3 +300,5 @@ def max_smaller_value(lst, value):
 
     # Return the maximum value among the smaller values
     return max(smaller_values)
+
+
