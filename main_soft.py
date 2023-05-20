@@ -147,12 +147,12 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     # Create dictionary holding obj, relecting the difference between demanded and scheduled room capacity
     obj_s_c_p = {}
     C_s_dict = {}
-    for s in room_capacities[:-1]:
+    for index, s in enumerate(room_capacities[:-1]):
         C_s = [c for c in courses.values() if c.num_students > s]
         C_s_dict[s] = C_s
         for c in C_s:
             for p in periods:
-                obj_s_c_p[s, c.name, p] = min(c.num_students - s, s + 1 - s)
+                obj_s_c_p[s, c.name, p] = min(c.num_students - s, room_capacities[index+1] - s)
 
     # Define the objective function
     # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
@@ -224,25 +224,26 @@ def preprocess_second_stage(instance, courses, rooms, x, y):
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
-    print(room_capacities)
 
     # Define set of Edges between U and V
     E = []
     for s in room_capacities[:-1]:
         C_s = [course.name for course in courses.values() if course.num_students > s] 
         for (c, p) in U:
-            for (r, _) in V:
-                #if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
-                if courses[c].num_students <= rooms[r].capacity:
-                    E.append((c, r, p))
-                if c in C_s:
-                    if (y[s, c, p].X == 1 and courses[c].num_students > rooms[r].capacity and 
-                        rooms[r].capacity == max_smaller_value(room_capacities, courses[c].num_students)):
+            for (r, period) in V:
+                if p == period:
+                    #if y[s, c, p].X == 0 and courses[c].num_students <= r.capacity:
+                    if courses[c].num_students <= rooms[r].capacity:
                         E.append((c, r, p))
+                    if c in C_s:
+                        if (y[s, c, p].X == 1 and courses[c].num_students > rooms[r].capacity and 
+                            rooms[r].capacity == max_smaller_value(room_capacities, courses[c].num_students)):
+                            print(f'I was here: {s},{c},{p}')
+                            E.append((c, r, p))
+                        else:
+                            pass
                     else:
                         pass
-                else:
-                    pass
 
     # Remove duplicates            
     E = list(set(E))
@@ -273,8 +274,6 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
                         
     # Constraint (20): sum over u_c,p v_r,p ∈δ(u_c,p ) (u_c,p v_r,p) = 1 ∀u_c,p ∈U
     # TODO - Add cut delta(u_c,p)
-    #print(f'E: {E}')
-    #print(f'U: {U}')
     for c, p in U:
         stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
                                 for r in [e[1] for e in E if (e[0],e[2]) == (c,p)])== 1)
