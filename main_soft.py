@@ -1,6 +1,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 import datetime
+import os
 from tools import read_instance_file
 from tools import *
 from output_tools import *
@@ -172,10 +173,11 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     return model
 
 # Solve the model and print the results
-def solve_model_and_print_results(model, filename):
+def solve_model_and_print_results(model, timelimit, filename):
     try:
         # Optimize the model
-        model.Params.LogFile = filename + '_log_' + str(datetime.datetime.now()) + '.txt'
+        model.Params.LogFile = filename + '_log' + '.txt'
+        model.setParam('TimeLimit', timelimit)
         model.optimize()
         
         # Check if an optimal solution was found
@@ -193,10 +195,32 @@ def solve_model_and_print_results(model, filename):
 
             # Print objective value
             print('Obj: %g' % model.objVal)
+            obj = model.objVal
+            lb = model.ObjBound
+            gap = model.MIPGap
+            time = model.Runtime
+            optimality = True
             
         # If no optimal solution was found
         else:
             print('No optimal solution found. Status code: ' + str(model.status))
+
+            # Print solution to file
+            sol = ['']
+            for v in model.getVars():
+                if v.x > 0.5:
+                    sol += '%s %g' % (v.varName, v.x) + '\n'
+            
+            with open(filename + '_best_solution.txt', 'w') as f:
+                f.write(''.join(sol))
+
+            # Print objective value
+            print('Best Obj: %g' % model.objVal)
+            obj = model.objVal
+            lb = model.ObjBound
+            gap = model.MIPGap
+            time = model.Runtime
+            optimality = False
 
     # Catch any Gurobi errors
     except gp.GurobiError as e:
@@ -206,7 +230,7 @@ def solve_model_and_print_results(model, filename):
     except Exception as e:
         print(e)
 
-    pass
+    return [obj, lb, gap, time, optimality]
 
 def preprocess_second_stage(instance, courses, rooms, x, y):
     # Define U = {(course, period) : x[course, period] == 1, for all courses and periods}
@@ -277,12 +301,17 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
     return stage2_model, y, uv
 
 
-def main():
+def run_optimization(instance_name, time_limit_tuple, run_df):
     # Read input data
-    instance, courses, rooms, curricula = read_instance_file("Instances/comp01.txt")
+    instance, courses, rooms, curricula = read_instance_file(f"Instances/{instance_name}.txt")
 
     # Compute required sets and graphs
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
+
+    # Make output directory
+    output_dir = f'Output/{time_limit_tuple}/{instance_name}'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     ### First stage ###
 
@@ -292,15 +321,15 @@ def main():
     # Set the objective function
     model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
 
-    model.write("Output/model_first_stage.lp")
+    model.write(f"{output_dir}/model_first_stage.lp")
 
     # Solve the model and print the results
-    solve_model_and_print_results(model, 'Output/first_stage')
+    first_stage_list = solve_model_and_print_results(model, time_limit_tuple[0], f'{output_dir}/first_stage')
 
     # Call the visualization functions
     # Extract the solution into a DataFrame
     sol_df = extract_solution_first_stage(x, courses, range(instance.num_periods), instance.periods_per_day)
-    sol_df.to_csv("Output/solution_first_stage.csv")
+    sol_df.to_csv(f"{output_dir}/solution_first_stage.csv")
     
 
     # Define your days of the week
@@ -312,7 +341,7 @@ def main():
     # Create timetables for all courses
     timetables_courses = create_timetables(sol_df, 'Course', days_of_week, instance.periods_per_day)
     master_timetable_courses = merge_df_cells(list(timetables_courses.values()))
-    master_timetable_courses.to_csv("Output/master_timetable_courses.csv")
+    master_timetable_courses.to_csv(f"{output_dir}/master_timetable_courses.csv")
 
     # Create timetables for all curricula
     # curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
@@ -323,16 +352,36 @@ def main():
 
     # Build the second stage model
     model_second_stage, y_2, uv = model_builder_second_stage(instance, courses, rooms, U, V, E)
-    model_second_stage.write("Output/model_second_stage.lp")
+    model_second_stage.write(f"{output_dir}/model_second_stage.lp")
 
     # Solve the second stage model
-    solve_model_and_print_results(model_second_stage, 'Output/second_stage')
+    second_stage_list = solve_model_and_print_results(model_second_stage, time_limit_tuple[1], f'{output_dir}/second_stage')
 
     sol_df = extract_solution_second_stage(uv, instance, sol_df)
-    sol_df.to_csv("Output/solution_final.csv")
-    
+    sol_df.to_csv(f"{output_dir}/solution_final.csv")
+
     # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
     # print(timetables_rooms)
+
+    return [instance_name] + first_stage_list + second_stage_list
+
+def main(): 
+    instance_names = []
+    for i in range(1,15):
+        if i < 10:
+            instance_names.append(f'comp0{i}')
+        else:
+            instance_names.append(f'comp{i}')
+    
+    time_limits = [(300, 80), (3300, 500)]
+
+    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage_optimality', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage optimality', 'total'])
+
+    for time_limit in time_limits[:1]:
+        for instance_name in instance_names[0:1]:
+            run_info = run_optimization(instance_name, time_limit, run_df)
+            run_df = pd.concat([run_df, pd.DataFrame([run_info], columns=run_df.columns)], ignore_index=True)
+            run_df.to_csv(f'Output/{time_limit}/run_df.csv')
 
 if __name__ == "__main__":
     main()

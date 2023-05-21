@@ -250,25 +250,25 @@ def read_instance_file(file_path):
         line_idx += 1
 
     # Print the read data
-    print("Instance:")
-    print(f"Name: {instance.name}, Courses: {instance.num_courses}, Rooms: {instance.num_rooms}, Days: {instance.days}, "
-          f"Periods per day: {instance.periods_per_day}, Curricula: {instance.num_curricula}, Constraints: {instance.num_constraints}")
+    # print("Instance:")
+    # print(f"Name: {instance.name}, Courses: {instance.num_courses}, Rooms: {instance.num_rooms}, Days: {instance.days}, "
+    #       f"Periods per day: {instance.periods_per_day}, Curricula: {instance.num_curricula}, Constraints: {instance.num_constraints}")
 
-    print("\nCourses:")
-    for course in courses.values():
-        print(f"{course.name} {course.teacher} {course.num_lectures} {course.min_days} {course.num_students}")
-        for unavailability in course.unavailability:
-            print(f"  Unavailability: Period {unavailability}")
+    # print("\nCourses:")
+    # for course in courses.values():
+    #     print(f"{course.name} {course.teacher} {course.num_lectures} {course.min_days} {course.num_students}")
+    #     for unavailability in course.unavailability:
+    #         print(f"  Unavailability: Period {unavailability}")
 
-    print("\nRooms:")
-    for room in rooms.values():
-        print(f"{room.name} {room.capacity}")
+    # print("\nRooms:")
+    # for room in rooms.values():
+    #     print(f"{room.name} {room.capacity}")
 
-    print("\nCurricula:")
-    for curriculum in curricula.values():
-        print(f"{curriculum.name} {curriculum.num_courses}")
-        for course in curriculum.courses:
-            print(f"  {course.name}")
+    # print("\nCurricula:")
+    # for curriculum in curricula.values():
+    #     print(f"{curriculum.name} {curriculum.num_courses}")
+    #     for course in curriculum.courses:
+    #         print(f"  {course.name}")
 
     return instance, courses, rooms, curricula
 
