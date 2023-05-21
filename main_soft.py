@@ -1,19 +1,19 @@
 import gurobipy as gp
 from gurobipy import GRB
-import itertools
+import datetime
 from tools import read_instance_file
 from tools import *
 from output_tools import *
 
 # Compute required sets and graphs
 def preprocess_data(instance, courses, rooms, curricula):
+    '''Only needed for base model - not the actual model'''
     # Compute eligible rooms for each course
     for course in courses.values():
         course.compute_eligible_rooms(rooms)
 
     # Compute conflict graph
     conflict_graph = generate_conflict_graph(instance, courses, curricula)
-    conflict_graph.print_graph()
 
     # Compute period graphs
     schedule_graph = ScheduleGraph(instance, courses)
@@ -35,7 +35,6 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     for course in courses:
         available_periods = list(set(periods) - set(courses[course].unavailability))
         model.addConstr(sum(x[course, period] for period in available_periods) == courses[course].num_lectures)
-    print(f'Done: Course lectures')
 
     ### Constraints for room capacities ###
 
@@ -46,7 +45,7 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     
     # Compute list of room capacities
     room_capacities = [room.capacity for room in rooms.values()]
-    # Remove duplicates to get a set of room capacities
+    # Remove duplicates and sort
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
 
@@ -55,15 +54,15 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
         C_s = [course.name for course in courses.values() if course.num_students > s] 
         for c in C_s:
             for p in periods:
-                # Add binary variables y[s, c, p] for each course c, period p and room capacity s
+                # Add binary variables y[s, c, p] for course c, period p and room capacity s
                 y[s, c, p] = model.addVar(vtype=GRB.BINARY, name=f"y_{s}_{c}_{p}")
                 # Add constraint 
-                # TODO - Explain this constraint
+                # Enforce that y[s, c, p] can only be one if course c is scheduled at period p
                 model.addConstr(x[c, p] - y[s, c, p] >= 0, 
                             name=f"room_capacity_{c}_{p}_{s}")
 
-    # 3. sum over c∈C≥s(x_c,p − y_s,c,p) ≤ |R≥s|
-    # TODO - Explain this constraint
+    # Course scheduled in rooms with capacity at least s is less than or equal to number of scheduled courses with demand of at least s
+    # By including y[s, c, p] in the constraint, we make this a soft constraint
     for s in room_capacities[:-1]:
         C_s = [c.name for c in courses.values() if c.num_students > s] 
         R_s = [r.name for r in rooms.values() if r.capacity > s]
@@ -73,10 +72,10 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
 
     ### Min working days constraints ###
 
-    # Create z variables
+    # Create z variables for courses and days
     z = model.addVars(courses, range(instance.days), vtype=GRB.BINARY, name="z")
 
-    # Add constraint: sum over p∈d (x_c,p) - z_c,d ≥0 ∀c∈C, d∈D
+    # If a course is scheduled at least once on a day, z[c, d] is 1
     for c in courses.keys():
         for d in range(instance.days):
             periods_in_day = [p for p in periods if p // instance.periods_per_day == d]
@@ -85,7 +84,8 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     # create w variables
     w = model.addVars(courses.keys(), vtype=GRB.INTEGER, name="w")
 
-    # Add constraint: sum over d (z_c,d) + w_c ≥ mnd(c) ∀c∈C
+    # Enforce that course is scheduled at least min_days times
+    # We make this a soft constraint by including w[c] in the constraint
     for c, course in courses.items():
         model.addConstr(gp.quicksum(z[c, d] for d in range(instance.days)) + w[c] >= course.min_days, f"min_days2_{c}")
 
@@ -121,7 +121,7 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     teachers = set(course.teacher for course in courses.values())
     teachers_courses = {teacher: [course for course in courses.values() if course.teacher == teacher] for teacher in teachers}
 
-    # For each period and each teacher, the sum of x[c, p] for all courses taught by the teacher should be <= 1.
+    # Teacher can only teach one course at a time (in one period)
     for teacher in teachers:
         for p in periods:
             model.addConstr(
@@ -134,17 +134,13 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     # Create periods
     periods = range(instance.num_periods)
 
-    # Set the objective function for the problem
-    V_conf = conflict_graph.get_nodes()
-
     # Compute list of room capacities
     room_capacities = [room.capacity for room in rooms.values()]
     # Remove duplicates to get a set of room capacities
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
     
-
-    # Create dictionary holding obj, relecting the difference between demanded and scheduled room capacity
+    # Create dictionary holding penalty term for not scheduling demaned room capcity
     obj_s_c_p = {}
     C_s_dict = {}
     for index, s in enumerate(room_capacities[:-1]):
@@ -154,21 +150,21 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
             for p in periods:
                 obj_s_c_p[s, c.name, p] = min(c.num_students - s, room_capacities[index+1] - s)
 
-    # Define the objective function
-    # obj = gp.quicksum(prio(c, p) * x[c, p] for (c, p) in V_conf)
-    # TODO - Add priority function
-    objective_1 = gp.quicksum(1 * x[c.name, p] for (c, p) in V_conf)
-    # objective_2 = gp.quicksum(y[s, c.name, p] for s in room_capacities[:-1] for c in C_s_dict[s] for p in periods)
-    objective_2 = 0
+    ### Set the objective function ###
+    
+    # Penalty for not scheduling demaneded room capacity
+    objective_1 = 0
     for s in room_capacities[:-1]:
         for c in C_s_dict[s]:
             for p in periods:
-                objective_2 += obj_s_c_p[s, c.name, p] * y[s, c.name, p]
-    objective_3 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
-    objective_4 = gp.quicksum(penalty_v * v[p, curriculum] for p in periods for curriculum in curricula)
+                objective_1 += obj_s_c_p[s, c.name, p] * y[s, c.name, p]
+    # Penalty for not meeting min working days
+    objective_2 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
+    # Penalty for not meeting curriculum compactness
+    objective_3 = gp.quicksum(penalty_v * v[p, curriculum] for p in periods for curriculum in curricula)
     
     # Set the objective function to the model
-    model.setObjective(objective_1 + objective_2 + objective_3 + objective_4, GRB.MINIMIZE)
+    model.setObjective(objective_1 + objective_2 + objective_3, GRB.MINIMIZE)
 
     # Update the model to include the objective
     model.update()
@@ -176,23 +172,23 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     return model
 
 # Solve the model and print the results
-def solve_model_and_print_results_first_stage(model):
-    # Solve the model and print the results
+def solve_model_and_print_results(model, filename):
     try:
         # Optimize the model
+        model.Params.LogFile = filename + '_log_' + str(datetime.datetime.now()) + '.txt'
         model.optimize()
         
         # Check if an optimal solution was found
         if model.status == GRB.OPTIMAL:
             print('Optimal solution found')
 
-            # Print solution
+            # Print solution to file
             sol = ['']
             for v in model.getVars():
                 if v.x > 0.5:
                     sol += '%s %g' % (v.varName, v.x) + '\n'
             
-            with open('solution.txt', 'w') as f:
+            with open(filename + '_solution.txt', 'w') as f:
                 f.write(''.join(sol))
 
             # Print objective value
@@ -256,46 +252,30 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
 
     # Define decision variables
     y = stage2_model.addVars(courses, rooms, vtype=GRB.BINARY, name="y")  # y_c,r
-    u_v = stage2_model.addVars(E, vtype=GRB.BINARY, name="u_v")  # u_c,p v_r,p
-    
-    # Save u_v as txt file
-    with open('u_v.txt', 'w') as f:
-        for key, value in u_v.items():
-            f.write('%s:%s\n' % (key, value))
+    uv = stage2_model.addVars(E, vtype=GRB.BINARY, name="u_v")  # u_c,p v_r,p
 
-    # Objective function: minimize sum over c∈C,r∈R(y_c,r)
-    stage2_model.setObjective(gp.quicksum(y[c, r] for c in courses for r in rooms), GRB.MINIMIZE)
+    # Objective function - Minimize sum over all courses: Number of rooms used per course (minus the number of courses)
+    print(f'Number of courses: {instance.num_courses}')
+    stage2_model.setObjective(gp.quicksum(y[c, r] for c in courses for r in rooms) - instance.num_courses , GRB.MINIMIZE)
 
-    # Constraint (19): sum over p∈P(u_c,p v_r,p)−|P|·y_c,r≤0 ∀c∈C,r∈R
+    # y_c,r is set to 1 if course c is assigned to room r in any period
     for c in courses:
         for r in rooms:
-            stage2_model.addConstr(u_v.sum(c,r,'*') - 
+            stage2_model.addConstr(uv.sum(c,r,'*') - 
                                    instance.num_periods * y[c, r] <= 0)
                         
-    # Constraint (20): sum over u_c,p v_r,p ∈δ(u_c,p ) (u_c,p v_r,p) = 1 ∀u_c,p ∈U
-    # TODO - Add cut delta(u_c,p)
+    # Courses have to be assigned to suitable rooms for scheduled periods
     for c, p in U:
-        stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
+        stage2_model.addConstr(gp.quicksum(uv[c, r, p] 
                                 for r in [e[1] for e in E if (e[0],e[2]) == (c,p)])== 1)
 
-    # Constraint (21): sum over u_c,p v_r,p ∈δ(v_r,p ) ( u_c,p v_r,p) ≤ 1 ∀v_r,p ∈ V
-    # TODO - Add cut delta(v_r,p)
+    # Rooms can only be used once per period
     for r, p in V:
-        stage2_model.addConstr(gp.quicksum(u_v[c, r, p] 
+        stage2_model.addConstr(gp.quicksum(uv[c, r, p] 
                                             for c in [e[0] for e in E if (e[1],e[2]) == (r,p)]) <= 1)
 
-    stage2_model.write("model_second_stage.lp")
+    return stage2_model, y, uv
 
-    # Solve the second stage model
-    stage2_model.optimize()
-
-    #stage2_model.computeIIS()
-    #stage2_model.write("model.ilp")
-
-    # print results
-    for v in stage2_model.getVars():
-        if v.x > 0.5:
-            print('%s %g' % (v.varName, v.x))
 
 def main():
     # Read input data
@@ -312,40 +292,47 @@ def main():
     # Set the objective function
     model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
 
-    model.write("model_first_stage.lp")
+    model.write("Output/model_first_stage.lp")
 
     # Solve the model and print the results
-    solve_model_and_print_results_first_stage(model)
+    solve_model_and_print_results(model, 'Output/first_stage')
 
-     # Call the visualization functions
+    # Call the visualization functions
     # Extract the solution into a DataFrame
     sol_df = extract_solution_first_stage(x, courses, range(instance.num_periods), instance.periods_per_day)
     sol_df.to_csv("Output/solution_first_stage.csv")
+    
 
     # Define your days of the week
-    days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][0:instance.days]
+    days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][0:instance.days]
 
     # Create timetables for all teachers
-    timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
+    # timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
 
     # Create timetables for all courses
     timetables_courses = create_timetables(sol_df, 'Course', days_of_week, instance.periods_per_day)
     master_timetable_courses = merge_df_cells(list(timetables_courses.values()))
     master_timetable_courses.to_csv("Output/master_timetable_courses.csv")
-    print('Master timetable for all courses: \n')
-    print(master_timetable_courses)
-    print('\n')
 
     # Create timetables for all curricula
-    curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
+    # curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
 
     ### Second stage ###
 
     U, V, E = preprocess_second_stage(instance, courses, rooms, x, y)
 
     # Build the second stage model
-    model_builder_second_stage(instance, courses, rooms, U, V, E)
+    model_second_stage, y_2, uv = model_builder_second_stage(instance, courses, rooms, U, V, E)
+    model_second_stage.write("Output/model_second_stage.lp")
 
+    # Solve the second stage model
+    solve_model_and_print_results(model_second_stage, 'Output/second_stage')
+
+    sol_df = extract_solution_second_stage(uv, instance, sol_df)
+    sol_df.to_csv("Output/solution_final.csv")
+    
+    # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
+    # print(timetables_rooms)
 
 if __name__ == "__main__":
     main()

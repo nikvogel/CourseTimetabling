@@ -1,6 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from gurobipy import GRB
 
 def extract_solution_first_stage(x, courses, periods, periods_per_day):
     """Extracts the solution from the Gurobi model."""
@@ -75,3 +76,16 @@ def merge_df_cells(dfs):
         index=dfs[0].index,
         columns=dfs[0].columns
     )
+
+def extract_solution_second_stage(uv, instance, sol_df):
+    """Extracts the solution from the Gurobi model."""
+    for var in uv:
+        if uv[var].x > 0.5:
+            day = var[2] // instance.periods_per_day
+            period_on_day = var[2] % instance.periods_per_day
+            row_ix = (sol_df[(sol_df['Course']  == var[0]) & (sol_df['Day'] == day) & (sol_df['Period'] == period_on_day)].index.tolist())
+            if len(row_ix) == 1:
+                sol_df.at[row_ix[0], 'Room'] = var[1]
+            else:
+                print('No course is scheduled for the course or more than one course is scheduled in the same period \n')
+    return sol_df
