@@ -333,9 +333,13 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
 
     print(f'Solution is feasible: {verify_feasibility(sol_df, instance, courses, curricula)}')
 
-    print(f'Total room constraint penalty: {calculate_penalty_room_constraint(sol_df, instance, courses, rooms)}')
-    print(f'Total curriculum constraint penalty: {calculate_penalty_curriculum_compactness(sol_df, instance, curricula)}')
-    print(f'Total min days penalty: {calculate_penalty_min_days_constraint(sol_df, courses)}')
+    penalties = [calculate_penalty_room_constraint(sol_df, instance, courses, rooms), 
+                 calculate_penalty_curriculum_compactness(sol_df, instance, curricula),
+                 calculate_penalty_min_days_constraint(sol_df, courses)]
+
+    print(f'Total room constraint penalty: {penalties[0]}')
+    print(f'Total curriculum constraint penalty: {penalties[1]}')
+    print(f'Total min days penalty: {penalties[2]}')
 
     # Define your days of the week
     days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][0:instance.days]
@@ -370,7 +374,7 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
     # print(timetables_rooms)
 
-    return [instance_name] + [time_limit_tuple] + first_stage_list + second_stage_list + [first_stage_list[0] + second_stage_list[0]]
+    return [instance_name] + [time_limit_tuple] + first_stage_list + penalties + second_stage_list + [first_stage_list[0] + second_stage_list[0]]
 
 def main(): 
     instance_names = []
@@ -382,13 +386,14 @@ def main():
     
     time_limits = [(300, 80), (3300, 500)]
 
-    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage time', 'second_stage optimality', 'total'])
+    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage LB', 'second_stage optimality', 'total'])
 
     for time_limit in time_limits[:1]:
-        for instance_name in instance_names[1:2]:
+        for instance_name in instance_names[:14]:
             run_info = run_optimization(instance_name, time_limit, run_df)
             run_df = pd.concat([run_df, pd.DataFrame([run_info], columns=run_df.columns)], ignore_index=True)
             run_df.to_csv(f'Output/{time_limit}/run_df.csv')
 
 if __name__ == "__main__":
     main()
+ 
