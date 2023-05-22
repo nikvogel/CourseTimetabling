@@ -22,7 +22,7 @@ def preprocess_data(instance, courses, rooms, curricula):
     return conflict_graph, schedule_graph
 
 # Build the optimization model
-def model_builder_first_stage(instance, courses, rooms, curricula, conflict_graph, schedule_graph):
+def model_builder_first_stage(instance, courses, rooms, curricula):
     # Create a new model
     model = gp.Model("Course_Timetabling")
 
@@ -34,14 +34,14 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
 
     # Enforce that each course is scheduled exactly as often as required number of lectures
     for course in courses:
-        available_periods = list(set(periods) - set(courses[course].unavailability))
-        model.addConstr(sum(x[course, period] for period in available_periods) == courses[course].num_lectures)
+        model.addConstr(gp.quicksum(x[course, period] for period in periods) == courses[course].num_lectures)
+        model.addConstr(gp.quicksum(x[course, period] for period in courses[course].unavailability) == 0)
 
     ### Constraints for room capacities ###
 
     # Number of courses that can take place at p is less than or equal to the number of (available) rooms
     for period in periods:
-        model.addConstr(sum(x[course, period] for course in courses) <= 
+        model.addConstr(gp.quicksum(x[course, period] for course in courses) <= 
                         instance.num_rooms,  name=f"room_availability_{period}")
     
     # Compute list of room capacities
@@ -76,14 +76,14 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     # Create z variables for courses and days
     z = model.addVars(courses, range(instance.days), vtype=GRB.BINARY, name="z")
 
-    # If a course is scheduled at least once on a day, z[c, d] is 1
-    for c in courses.keys():
+    # z_c,d can be set to one only if course c takes place at some period of day d
+    for c in courses:
         for d in range(instance.days):
             periods_in_day = [p for p in periods if p // instance.periods_per_day == d]
             model.addConstr(gp.quicksum(x[c, p] for p in periods_in_day) - z[c, d] >= 0, f"min_days1_{c}_{d}")
 
     # create w variables
-    w = model.addVars(courses.keys(), vtype=GRB.INTEGER, name="w")
+    w = model.addVars(courses, vtype=GRB.INTEGER, name="w")
 
     # Enforce that course is scheduled at least min_days times
     # We make this a soft constraint by including w[c] in the constraint
@@ -105,7 +105,7 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
             for period in range(instance.periods_per_day):
                 p = day * instance.periods_per_day + period  # calculate the absolute period
                 if period != 0:  # not the first period of the day
-                    if period != instance.periods_per_day - 1:  # not the last period of the day
+                    if period != (instance.periods_per_day - 1):  # not the last period of the day
                         model.addConstr(-r[p - 1, curriculum] + r[p, curriculum] - r[p + 1, curriculum] - v[p, curriculum] <= 0,
                                         f"compactness_{curriculum}_{day}_{period}")
                     else:  # for the last period of the day
@@ -114,7 +114,6 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
                 else:  # for the first period of the day
                     model.addConstr(r[p, curriculum] - r[p + 1, curriculum] - v[p, curriculum] <= 0,
                                     f"compactness_{curriculum}_{day}_{period}_first")
-    print(f'Done: Conflict constraints')
 
     ### Teacher constraint ###
 
@@ -131,7 +130,7 @@ def model_builder_first_stage(instance, courses, rooms, curricula, conflict_grap
     return model, x, y, w, v
 
 # Set the objective function
-def set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc, penalty_v):
+def set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, penalty_wc, penalty_v):
     # Create periods
     periods = range(instance.num_periods)
 
@@ -141,7 +140,7 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
     room_capacities = list(set(room_capacities))
     room_capacities.sort()
     
-    # Create dictionary holding penalty term for not scheduling demaned room capcity
+    # Create dictionary holding penalty term for not scheduling demanded room capcity
     obj_s_c_p = {}
     C_s_dict = {}
     for index, s in enumerate(room_capacities[:-1]):
@@ -149,7 +148,8 @@ def set_objective_function_first_stage(model, x, y, w, v, instance, courses, roo
         C_s_dict[s] = C_s
         for c in C_s:
             for p in periods:
-                obj_s_c_p[s, c.name, p] = min(c.num_students - s, room_capacities[index+1] - s)
+                # obj_s_c_p[s, c.name, p] = min(c.num_students - s, room_capacities[index+1] - s)
+                obj_s_c_p[s, c.name, p] = c.num_students - s
 
     ### Set the objective function ###
     
@@ -316,12 +316,12 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     ### First stage ###
 
     # Create a new model
-    model, x, y, w, v = model_builder_first_stage(instance, courses, rooms, curricula, conflict_graph, schedule_graph)
+    model, x, y, w, v = model_builder_first_stage(instance, courses, rooms, curricula)
 
     # Set the objective function
-    model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, conflict_graph, penalty_wc=5, penalty_v=2)
+    model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, penalty_wc=5, penalty_v=2)
 
-    model.write(f"{output_dir}/model_first_stage.lp")
+    model.write(f"{output_dir}/first_stage_model.lp")
 
     # Solve the model and print the results
     first_stage_list = solve_model_and_print_results(model, time_limit_tuple[0], f'{output_dir}/first_stage')
@@ -329,22 +329,27 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     # Call the visualization functions
     # Extract the solution into a DataFrame
     sol_df = extract_solution_first_stage(x, courses, range(instance.num_periods), instance.periods_per_day)
-    sol_df.to_csv(f"{output_dir}/solution_first_stage.csv")
-    
+    sol_df.to_csv(f"{output_dir}/first_stage_solution.csv")
+
+    print(f'Solution is feasible: {verify_feasibility(sol_df, instance, courses, curricula)}')
+
+    print(f'Total room constraint penalty: {calculate_penalty_room_constraint(sol_df, instance, courses, rooms)}')
+    print(f'Total curriculum constraint penalty: {calculate_penalty_curriculum_compactness(sol_df, instance, curricula)}')
+    print(f'Total min days penalty: {calculate_penalty_min_days_constraint(sol_df, courses)}')
 
     # Define your days of the week
     days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][0:instance.days]
 
     # Create timetables for all teachers
-    # timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
+    timetables_teachers = create_timetables(sol_df, 'Teacher', days_of_week, instance.periods_per_day)
 
     # Create timetables for all courses
     timetables_courses = create_timetables(sol_df, 'Course', days_of_week, instance.periods_per_day)
-    master_timetable_courses = merge_df_cells(list(timetables_courses.values()))
-    master_timetable_courses.to_csv(f"{output_dir}/master_timetable_courses.csv")
+    # master_timetable_courses = merge_df_cells(list(timetables_courses.values()))
+    # master_timetable_courses.to_csv(f"{output_dir}/master_timetable_courses.csv")
 
     # Create timetables for all curricula
-    # curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
+    curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
 
     ### Second stage ###
 
@@ -352,18 +357,20 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
 
     # Build the second stage model
     model_second_stage, y_2, uv = model_builder_second_stage(instance, courses, rooms, U, V, E)
-    model_second_stage.write(f"{output_dir}/model_second_stage.lp")
+    model_second_stage.write(f"{output_dir}/second_stage_model.lp")
 
     # Solve the second stage model
     second_stage_list = solve_model_and_print_results(model_second_stage, time_limit_tuple[1], f'{output_dir}/second_stage')
 
     sol_df = extract_solution_second_stage(uv, instance, sol_df)
-    sol_df.to_csv(f"{output_dir}/solution_final.csv")
+    sol_df.to_csv(f"{output_dir}/final_solution.csv")
+
+    print(f'Total room stability penalty: {calculate_penalty_room_stability(sol_df, courses)}')
 
     # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
     # print(timetables_rooms)
 
-    return [instance_name] + first_stage_list + second_stage_list
+    return [instance_name] + [time_limit_tuple] + first_stage_list + second_stage_list + [first_stage_list[0] + second_stage_list[0]]
 
 def main(): 
     instance_names = []
@@ -375,10 +382,10 @@ def main():
     
     time_limits = [(300, 80), (3300, 500)]
 
-    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage_optimality', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage optimality', 'total'])
+    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage time', 'second_stage optimality', 'total'])
 
     for time_limit in time_limits[:1]:
-        for instance_name in instance_names[0:1]:
+        for instance_name in instance_names[1:2]:
             run_info = run_optimization(instance_name, time_limit, run_df)
             run_df = pd.concat([run_df, pd.DataFrame([run_info], columns=run_df.columns)], ignore_index=True)
             run_df.to_csv(f'Output/{time_limit}/run_df.csv')
