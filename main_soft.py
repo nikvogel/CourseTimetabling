@@ -386,9 +386,9 @@ def main():
     
     time_limits = [(300, 80), (3300, 500)]
 
-    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty', 'second_stage obj', 'second_stage LB', 'second_stage time', 'second_stage LB', 'second_stage optimality', 'total'])
+    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty', 'second_stage obj', 'second_stage LB', 'second_stage gap%', 'second_stage time', 'second_stage optimality', 'total'])
 
-    for time_limit in time_limits[:1]:
+    for time_limit in time_limits[1:]:
         for instance_name in instance_names[:14]:
             run_info = run_optimization(instance_name, time_limit, run_df)
             run_df = pd.concat([run_df, pd.DataFrame([run_info], columns=run_df.columns)], ignore_index=True)
