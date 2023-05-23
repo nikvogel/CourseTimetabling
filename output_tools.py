@@ -13,6 +13,17 @@ def extract_solution_first_stage(x, courses, periods, periods_per_day):
                             'Day': p // periods_per_day, 'Period': p % periods_per_day})
     return pd.DataFrame(sol)
 
+def extract_solution(x, courses, periods, rooms, periods_per_day):
+    """Extracts the solution from the Gurobi model."""
+    sol = []
+    for c, course in courses.items():
+        for p in periods:
+            for r in rooms:
+                if x[c, p, r].x > 0.5:  # if this course is scheduled at this period
+                    sol.append({'Course': c, 'Teacher': course.teacher,  
+                            'Day': p // periods_per_day, 'Period': p % periods_per_day, 'Room': r})
+    return pd.DataFrame(sol)
+
 def create_timetables(df, entity, days, periods_per_day):
     """Creates timetables for the given entity."""
     entities = df[entity].unique()
@@ -241,7 +252,7 @@ def verify_feasibility(df, instance, courses, curricula, rooms=None):
             duplicates = [d_p for d_p in days_and_periods if days_and_periods.count(d_p) > 1]
             if len(duplicates) > 0:
                 print(f'Two courses are scheduled in the same period for room: {r} \n')
-                print(f'Period {duplicates.unique()} \n')
+                print(f'Period {set(duplicates)} \n')
                 feasible = False
 
     return feasible
