@@ -198,7 +198,7 @@ def solve_model_and_print_results(model, timelimit, filename):
     return [obj, lb, gap, time, optimality]
 
 
-def run_optimization(instance_name, time_limit_tuple, run_df):
+def run_optimization(instance_name, time_limit, run_df):
     # Read input data
     instance, courses, rooms, curricula = read_instance_file(f"Instances/{instance_name}.txt")
 
@@ -206,7 +206,7 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
     # Make output directory
-    output_dir = f'Output_hard/{time_limit_tuple}/{instance_name}'
+    output_dir = f'Output_hard/{time_limit}/{instance_name}'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -216,7 +216,7 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     model.write(f"{output_dir}/model.lp")
 
     # Solve the model and print the results
-    first_stage_list = solve_model_and_print_results(model, time_limit_tuple[0], f'{output_dir}/')
+    first_stage_list = solve_model_and_print_results(model, time_limit, f'{output_dir}/')
 
     # Call the visualization functions
     # Extract the solution into a DataFrame
@@ -253,7 +253,7 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
     # print(timetables_rooms)
 
-    return [instance_name] + [time_limit_tuple] + first_stage_list + penalties + [first_stage_list[0]]
+    return [instance_name] + [time_limit] + first_stage_list + penalties + [first_stage_list[0]]
 
 def main(): 
     instance_names = []
@@ -263,7 +263,7 @@ def main():
         else:
             instance_names.append(f'comp{i}')
     
-    time_limits = [(300, 80), (3300, 500)]
+    time_limits = [380, 3800]
 
     run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty', 'room_stability penalty', 'total'])
 
