@@ -127,45 +127,10 @@ def model_builder_first_stage(instance, courses, rooms, curricula):
             model.addConstr(
                 gp.quicksum(x[c.name, p] for c in teachers_courses[teacher]) <= 1,
                 f"teacher_conflicts_{teacher}_{p}")
-            
-    ### New idea: Minimize number of sets of courses that are scheduled at the same time ###
-
-    # Create the sets (maximum number of sets corresponds to the number of periods)
-    sets_ = periods
-
-    # Add binary variables f[c, s] for each course c and set s
-    f = model.addVars(courses, sets_, vtype=GRB.BINARY, name="y")
-    
-    # Add binary variables g[s, p] for each set s and period p
-    g = model.addVars(sets_, periods, vtype=GRB.BINARY, name="z")
-
-    # Add binary variables a[s] for each set
-    a = model.addVars(sets_, vtype=GRB.BINARY, name="a")
-
-
-    # Add constraint: Only courses of same set can be scheduled at the same time
-    # for set_ in sets_:
-    #     for p in periods:
-    #         for c in courses:
-    #             model.addConstr(x[c,p] == x[c,p] * f[c,set_] * g[set_,p], f"set_{set_}_{p}_{c}")
-
-
-    for set_ in sets_:
-        for p in periods:
-            for c in courses:
-                model.addConstr(x[c,p] == x[c,p] * f[c,set_], f"set_{set_}_{p}_{c}")
-                model.addConstr(x[c,p] == x[c,p] * g[set_,p], f"set_{set_}_{p}_{c}")
-    
-        
-    # If any course is part of a set, the set is considered as used
-    for set_ in sets_:
-        for period in periods:
-            model.addConstr(a[set_] >= g[set_, period])
-
-    return model, x, y, w, v, a
+    return model, x, y, w, v
 
 # Set the objective function
-def set_objective_function_first_stage(model, x, y, w, v, a, instance, courses, rooms, curricula, penalty_wc, penalty_v):
+def set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, penalty_wc, penalty_v):
     # Create periods
     periods = range(instance.num_periods)
 
@@ -198,16 +163,98 @@ def set_objective_function_first_stage(model, x, y, w, v, a, instance, courses, 
     objective_2 = gp.quicksum(penalty_wc * w[c] for c in courses.keys())
     # Penalty for not meeting curriculum compactness
     objective_3 = gp.quicksum(penalty_v * v[p, curriculum] for p in periods for curriculum in curricula)
-    # Penalty for sets
-    objective_4 = 0.5 * gp.quicksum(a[s] for s in periods)
     
     # Set the objective function to the model
-    model.setObjective(objective_1 + objective_2 + objective_3 + objective_4, GRB.MINIMIZE)
+    model.setObjective(objective_1 + objective_2 + objective_3, GRB.MINIMIZE)
 
     # Update the model to include the objective
     model.update()
 
     return model
+
+def solve_model_multiple(model, timelimit, filename):
+    try:
+        # Optimize the model
+        model.Params.LogFile = filename + '_log' + '.txt'
+        model.setParam('TimeLimit', timelimit)
+        model.setParam('PoolSearchMode', 2)
+        model.setParam('PoolSolutions', 5)
+        model.optimize()
+
+        # print solutions
+        solution_count = model.SolCount
+        if solution_count > 5:
+            num_best_solutions = 5
+        else:
+            num_best_solutions = solution_count
+
+        solution_tuples = []
+        for i in range(solution_count):
+            model.setParam(GRB.Param.SolutionNumber, i)
+            solution_tuple = (model.PoolObjVal, i)
+            solution_tuples.append(solution_tuple)
+            print(f"Solution {solution_tuple[1]}:")
+            print(f"Objective: {solution_tuple[0]}")
+            sol = ['']
+            # print(f'Variables: {model.Xn}')
+            for v in model.getVars():
+                if v.Xn > 0.5:
+                    sol += '%s %g' % (v.varName, v.Xn) + '\n'
+            
+            with open(filename + f'_solution_{i}.txt', 'w') as f:
+                f.write(''.join(sol))
+        
+        # Check if an optimal solution was found
+        if model.status == GRB.OPTIMAL:
+            print('Optimal solution found')
+
+            # Print solution to file
+            sol = ['']
+            for v in model.getVars():
+                if v.x > 0.5:
+                    sol += '%s %g' % (v.varName, v.x) + '\n'
+            
+            with open(filename + '_solution.txt', 'w') as f:
+                f.write(''.join(sol))
+
+            # Print objective value
+            print('Obj: %g' % model.objVal)
+            obj = model.objVal
+            lb = model.ObjBound
+            gap = model.MIPGap
+            time = model.Runtime
+            optimality = True
+            
+        # If no optimal solution was found
+        else:
+            print('No optimal solution found. Status code: ' + str(model.status))
+
+            # Print solution to file
+            sol = ['']
+            for v in model.getVars():
+                if v.x > 0.5:
+                    sol += '%s %g' % (v.varName, v.x) + '\n'
+            
+            with open(filename + '_best_solution.txt', 'w') as f:
+                f.write(''.join(sol))
+
+            # Print objective value
+            print('Best Obj: %g' % model.objVal)
+            obj = model.objVal
+            lb = model.ObjBound
+            gap = model.MIPGap
+            time = model.Runtime
+            optimality = False
+
+    # Catch any Gurobi errors
+    except gp.GurobiError as e:
+        print('Error code ' + str(e.errno) + ": " + str(e))
+
+    # Catch any non-Gurobi errors
+    except Exception as e:
+        print(e)
+
+    return [obj, lb, gap, time, optimality], solution_count
 
 # Solve the model and print the results
 def solve_model_and_print_results(model, timelimit, filename):
@@ -307,13 +354,66 @@ def preprocess_second_stage(instance, courses, rooms, x, y):
 
     return U, V, E
 
-def model_builder_second_stage(instance, courses, rooms, U, V, E):
+def preprocess_second_stage_Xn(instance, courses, rooms, x, y):
+    # Define U = {(course, period) : x[course, period] == 1, for all courses and periods}
+    U = [(c, p) for c in courses for p in range(instance.num_periods) if x[c, p].Xn == 1]
+
+    # Define V = {(room, period) for all rooms and periods}
+    V = [(r, p) for r in rooms for p in range(instance.num_periods)]
+
+    # Compute list of room capacities
+    room_capacities = [room.capacity for room in rooms.values()]
+    # Remove duplicates to get a set of room capacities
+    room_capacities = list(set(room_capacities))
+    room_capacities.sort()
+
+    # Compute list of room capacities
+    room_capacities = [room.capacity for room in rooms.values()]
+    # Remove duplicates and sort
+    room_capacities = list(set(room_capacities))
+    room_capacities.sort()
+
+    # Define set of Edges between U and V
+    E = []
+
+    for (c, p) in U:
+        for (r, period) in V:
+            # rework this part
+            if p == period:
+                relevant_s = [s for s in room_capacities[:-1] if s < courses[c].num_students]
+                relevant_s.sort(reverse=True)
+                # Check if y[s, c, p].Xn == 0 for s=max{s'|c in C_s'}
+                if len(relevant_s) == 0:
+                    if courses[c].num_students <= rooms[r].capacity:
+                        E.append((c, r, p))
+                        continue
+                if y[max(relevant_s), c, p].Xn  == 0:
+                    if courses[c].num_students <= rooms[r].capacity:
+                        E.append((c, r, p))
+                else:
+                    # get largest s that is not 1
+                    i = 0
+                    is_one = True
+                    while is_one:
+                        if y[relevant_s[i], c, p].Xn == 1:
+                            i += 1
+                        else:
+                            if rooms[r].capacity == relevant_s[i-1]:
+                                E.append((c, r, p))
+                            is_one = False
+
+    # Remove duplicates            
+    E = list(set(E))
+
+    return U, V, E
+
+def model_builder_second_stage(instance, courses, rooms, uu, vv, ee):
     # Define the second-stage model
     stage2_model = gp.Model("Course_Room_Assignment")
 
     # Define decision variables
     y = stage2_model.addVars(courses, rooms, vtype=GRB.BINARY, name="y")  # y_c,r
-    uv = stage2_model.addVars(E, vtype=GRB.BINARY, name="u_v")  # u_c,p v_r,p
+    uv = stage2_model.addVars(ee, vtype=GRB.BINARY, name="u_v")  # u_c,p v_r,p
 
     # Objective function - Minimize sum over all courses: Number of rooms used per course (minus the number of courses)
     print(f'Number of courses: {instance.num_courses}')
@@ -323,17 +423,17 @@ def model_builder_second_stage(instance, courses, rooms, U, V, E):
     for c in courses:
         for r in rooms:
             stage2_model.addConstr(uv.sum(c,r,'*') - 
-                                   instance.num_periods * y[c, r] <= 0)
+                                   courses[c].num_lectures* y[c, r] <= 0)
                         
     # Courses have to be assigned to suitable rooms for scheduled periods
-    for c, p in U:
+    for c, p in uu:
         stage2_model.addConstr(gp.quicksum(uv[c, r, p] 
-                                for r in [e[1] for e in E if (e[0],e[2]) == (c,p)])== 1)
+                                for r in [e[1] for e in ee if (e[0],e[2]) == (c,p)])== 1)
 
     # Rooms can only be used once per period
-    for r, p in V:
+    for r, p in vv:
         stage2_model.addConstr(gp.quicksum(uv[c, r, p] 
-                                            for c in [e[0] for e in E if (e[1],e[2]) == (r,p)]) <= 1)
+                                            for c in [e[0] for e in ee if (e[1],e[2]) == (r,p)]) <= 1)
 
     return stage2_model, y, uv
 
@@ -346,27 +446,31 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     conflict_graph, schedule_graph = preprocess_data(instance, courses, rooms, curricula)
 
     # Make output directory
-    output_dir = f'Output_medium_0.25/{time_limit_tuple}/{instance_name}'
+    output_dir = f'Output_multi/{time_limit_tuple}/{instance_name}'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     ### First stage ###
 
     # Create a new model
-    model, x, y, w, v, a = model_builder_first_stage(instance, courses, rooms, curricula)
+    model, x, y, w, v = model_builder_first_stage(instance, courses, rooms, curricula)
 
     # Set the objective function
-    model = set_objective_function_first_stage(model, x, y, w, v, a, instance, courses, rooms, curricula, penalty_wc=5, penalty_v=2)
+    model = set_objective_function_first_stage(model, x, y, w, v, instance, courses, rooms, curricula, penalty_wc=5, penalty_v=2)
 
     model.write(f"{output_dir}/first_stage_model.lp")
 
     # Solve the model and print the results
-    first_stage_list = solve_model_and_print_results(model, time_limit_tuple[0], f'{output_dir}/first_stage')
+    first_stage_list, solution_count = solve_model_multiple(model, time_limit_tuple[0], f'{output_dir}/first_stage')
 
     # Call the visualization functions
     # Extract the solution into a DataFrame
-    sol_df = extract_solution_first_stage(x, courses, range(instance.num_periods), instance.periods_per_day)
-    sol_df.to_csv(f"{output_dir}/first_stage_solution.csv")
+    sol_dfs = []
+    for solution_i in range(solution_count):
+        model.setParam(GRB.Param.SolutionNumber, solution_i)
+        sol_df = extract_solution_first_stage_Xn(x, courses, range(instance.num_periods), instance.periods_per_day)
+        sol_df.to_csv(f"{output_dir}/first_stage_solution_{solution_i}.csv")
+        sol_dfs.append(sol_df)
 
     print(f'Solution is feasible: {verify_feasibility(sol_df, instance, courses, curricula)}')
 
@@ -392,26 +496,36 @@ def run_optimization(instance_name, time_limit_tuple, run_df):
     # Create timetables for all curricula
     curricula_timetables = create_curricula_timetables(sol_df, curricula, days_of_week, instance.periods_per_day)
 
+    second_stage_lists = []
+
     ### Second stage ###
+    for solution_i in range(solution_count):
+        model.setParam(GRB.Param.SolutionNumber, solution_i)
+        uu, vv, ee = preprocess_second_stage_Xn(instance, courses, rooms, x, y)
 
-    U, V, E = preprocess_second_stage(instance, courses, rooms, x, y)
+        # Build the second stage model
+        model_second_stage, y_2, uv = model_builder_second_stage(instance, courses, rooms, uu, vv, ee)
+        model_second_stage.write(f"{output_dir}/second_stage_model.lp")
 
-    # Build the second stage model
-    model_second_stage, y_2, uv = model_builder_second_stage(instance, courses, rooms, U, V, E)
-    model_second_stage.write(f"{output_dir}/second_stage_model.lp")
+        # Solve the second stage model
+        second_stage_list = solve_model_and_print_results(model_second_stage, time_limit_tuple[1], f'{output_dir}/second_stage')
 
-    # Solve the second stage model
-    second_stage_list = solve_model_and_print_results(model_second_stage, time_limit_tuple[1], f'{output_dir}/second_stage')
+        second_stage_lists.extend(second_stage_list)
+        second_stage_lists.append(first_stage_list[0] + second_stage_list[0])
 
-    sol_df = extract_solution_second_stage(uv, instance, sol_df)
-    sol_df.to_csv(f"{output_dir}/final_solution.csv")
+        print(f'Second stage list: {second_stage_list}')
 
-    print(f'Total room stability penalty: {calculate_penalty_room_stability(sol_df, courses)}')
+        sol_df_total_i = extract_solution_second_stage_Xn(uv, instance, sol_dfs[solution_i])
+        sol_df_total_i.to_csv(f"{output_dir}/final_solution_{solution_i}.csv")
 
-    # timetables_rooms = create_timetables(sol_df, 'Room', days_of_week, instance.periods_per_day)
-    # print(timetables_rooms)
+        print(f'Total room stability penalty: {calculate_penalty_room_stability(sol_df_total_i, courses)}')
 
-    return [instance_name] + [time_limit_tuple] + first_stage_list + penalties + second_stage_list + [first_stage_list[0] + second_stage_list[0]]
+        # timetables_rooms = create_timetables(sol_df_total_i, 'Room', days_of_week, instance.periods_per_day)
+        # print(timetables_rooms)
+
+    
+
+    return [instance_name] + [time_limit_tuple] + first_stage_list + penalties + second_stage_lists
 
 def main(): 
     instance_names = []
@@ -421,15 +535,24 @@ def main():
         else:
             instance_names.append(f'comp{i}')
     
-    time_limits = [(300, 80), (3300, 500)]
+    time_limits = [(300, 80), (3300, 500), (13000, 2200)]
 
-    run_df = pd.DataFrame(columns=['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty', 'second_stage obj', 'second_stage LB', 'second_stage gap%', 'second_stage time', 'second_stage optimality', 'total'])
+    column_names = ['instance', 'time_limit', 'first_stage obj', 'first_stage LB', 'first_stage gap', 'first_stage time', 'first_stage optimality', 'room_capacity penalty', 'curriculum_compactness penalty', 'min_days penalty']
 
-    for time_limit in time_limits[:1]:
+    second_stage_column_names = ['second_stage obj', 'second_stage LB', 'second_stage gap%', 'second_stage time', 'second_stage optimality', 'total']
+    
+    for i in range(5):
+        for element in second_stage_column_names:
+            column_names.append(element + f'_{i}')
+
+    run_df = pd.DataFrame(columns=column_names)
+
+    for time_limit in time_limits[1:2]:
         for instance_name in instance_names[:]:
             run_info = run_optimization(instance_name, time_limit, run_df)
+            print(run_info)
             run_df = pd.concat([run_df, pd.DataFrame([run_info], columns=run_df.columns)], ignore_index=True)
-            run_df.to_csv(f'Output_medium_0.25/{time_limit}/run_df.csv')
+            run_df.to_csv(f'Output_multi/{time_limit}/run_df.csv')
 
 if __name__ == "__main__":
     main()

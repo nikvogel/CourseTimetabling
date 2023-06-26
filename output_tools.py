@@ -13,6 +13,16 @@ def extract_solution_first_stage(x, courses, periods, periods_per_day):
                             'Day': p // periods_per_day, 'Period': p % periods_per_day})
     return pd.DataFrame(sol)
 
+def extract_solution_first_stage_Xn(x, courses, periods, periods_per_day):
+    """Extracts the solution from the Gurobi model."""
+    sol = []
+    for c in courses.values():
+        for p in periods:
+            if x[c.name, p].Xn > 0.5:  # if this course is scheduled at this period
+                sol.append({'Course': c.name, 'Teacher': c.teacher,  
+                            'Day': p // periods_per_day, 'Period': p % periods_per_day})
+    return pd.DataFrame(sol)
+
 def extract_solution(x, courses, periods, rooms, periods_per_day):
     """Extracts the solution from the Gurobi model."""
     sol = []
@@ -99,6 +109,20 @@ def extract_solution_second_stage(uv, instance, sol_df):
                 sol_df.at[row_ix[0], 'Room'] = var[1]
             else:
                 print('No course is scheduled for the course or more than one course is scheduled in the same period \n')
+    return sol_df
+
+def extract_solution_second_stage_Xn(uv, instance, sol_df):
+    """Extracts the solution from the Gurobi model."""
+    for var in uv:
+        if uv[var].Xn > 0.5:
+            day = var[2] // instance.periods_per_day
+            period_on_day = var[2] % instance.periods_per_day
+            row_ix = (sol_df[(sol_df['Course']  == var[0]) & (sol_df['Day'] == day) & (sol_df['Period'] == period_on_day)].index.tolist())
+            if len(row_ix) == 1:
+                sol_df.at[row_ix[0], 'Room'] = var[1]
+            else:
+                print('No lecutre is scheduled for the course or more than one lecture is scheduled in this period \n')
+                print(row_ix)
     return sol_df
 
 def calculate_penalty_room_constraint(df, instance, courses, rooms):
